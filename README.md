@@ -1,4 +1,4 @@
-scala-inline
+Scala Inline [![Build Status](https://travis-ci.org/scala-inline/scala-inline.png?branch=master)](https://travis-ci.org/scala-inline/scala-inline)
 ============
 
-Library for predictable inlining and templating.
+Macro annotation based library for predictable inlining and templating.
