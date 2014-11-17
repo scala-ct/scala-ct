@@ -1,0 +1,4 @@
+[submodule "interpreter"]
+	path = interpreter
+	url = https://github.com/vjovanov/interpreter.git
+	branch = partial-evaluation

@@ -14,7 +14,7 @@ object ScalaInlineBuild extends Build {
   lazy val projectSettings = Seq[Setting[_]](
     version              := "0.1.0-SNAPSHOT",
     organization         := "ch.epfl.lamp",
-    licenses             := Seq("New BSD" -> 
+    licenses             := Seq("New BSD" ->
       url("https://raw.githubusercontent.com/scala-inline/scala-inline/master/LICENCE")),
     homepage             := Some(url("https://github.com/scala-inline/scala-inline")),
     organizationHomepage := Some(url("http://lamp.epfl.ch")),
@@ -25,8 +25,8 @@ object ScalaInlineBuild extends Build {
 
   lazy val scalaSettings = Defaults.defaultSettings ++ Seq(
     scalaOrganization    := scalaOrg,
-    scalaVersion         := "2.11.2",
-    crossScalaVersions := Seq("2.11.0", "2.11.1", "2.11.2"),
+    scalaVersion         := "2.11.4",
+    crossScalaVersions := Seq("2.11.4"),
     scalacOptions        := defaultScalacOptions
   )
 
@@ -40,8 +40,14 @@ object ScalaInlineBuild extends Build {
       "junit" % "junit" % "4.11" % "test" // we need JUnit explicitly
   )))
 
-  // modules  
-  lazy val scalaInline  = Project(id = "scala-inline", base = file(".") , settings = defaults ++ paradise ++ Seq(name := "scala-inline"))
+  // modules
+  lazy val scalaInline  = Project(
+    id = "scala-inline",
+    base = file("."),
+    settings = defaults ++ paradise ++ Seq(name := "scala-inline")
+  ) dependsOn (interpreter)
+
+  lazy val interpreter = ProjectRef(file("./interpreter"), "interpreter")
 
   lazy val defaults = projectSettings ++ scalaSettings ++ formatSettings ++ libraryDeps ++ Seq(
     resolvers +=  "OSSH" at "https://oss.sonatype.org/content/groups/public",
@@ -56,18 +62,31 @@ object ScalaInlineBuild extends Build {
     unmanagedSourceDirectories in Compile <<= (scalaSource in Compile)(Seq(_)),
     unmanagedSourceDirectories in Test <<= (scalaSource in Test)(Seq(_)),
     parallelExecution in Test := false,
-    incOptions := incOptions.value.withNameHashing(true)
+    incOptions := incOptions.value.withNameHashing(true),
+    scalacOptions in Test  <+= (packageBin in Compile, update in Compile, baseDirectory in Compile) map {
+      case (p, update, baseDirectory) =>
+        val cpath = update.matching(configurationFilter()).classpath ++
+          (baseDirectory / "lib" ** "*.jar").classpath
+        val interpreter = cpath.files.find(_.getName contains "interpreter").getOrElse(
+          baseDirectory / "interpreter" / "interpreter" / "target" / "scala-2.11" / "classes").absString
+
+        "-Xplugin:" + p + ":" + interpreter
+    },
+    // do not resolve every time we clean
+    // cleanKeepFiles ++= Seq("resolution-cache", "streams").map(target.value / _),
+    traceLevel in Test := 40
   )
 
   // add the macro paradise compiler plugin
   lazy val paradise = Seq(
     libraryDependencies += {
-      val paradiseVersion =  
-        if (scalaVersion.value == "2.11.2") "2.0.1"
-        else "2.0.0"
+      val paradiseVersion =
+        scalaVersion.value match {
+          case "2.11.2" | "2.11.3" | "2.11.4" => "2.0.1"
+          case _ => "2.0.0"
+        }
       compilerPlugin("org.scalamacros" % "paradise" %  paradiseVersion cross CrossVersion.full)
     },
-    libraryDependencies += "org.scalareflect" %% "interpreter" % "0.1.0-SNAPSHOT",
     scalacOptions := defaultScalacOptions
   )
 
@@ -114,7 +133,7 @@ object ScalaInlineBuild extends Build {
           <id>denish</id>
           <name>Denys Shabalin</name>
           <url>http://den.sh/</url>
-        </developer>        
+        </developer>
       </developers>
     )
   )
