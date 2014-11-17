@@ -1,20 +1,56 @@
 package ch.epfl
 
 import org.scalatest.{ FlatSpec, ShouldMatchers }
-import ch.epfl.inline._
+import ch.epfl.scalainline._
 
 class InlineSpec extends FlatSpec with ShouldMatchers {
 
-  "Inline" should "work with only vals" in {
+  def reify[T](x: => T) = x
 
-    @sinline val x = List(1, 2, 3)
+  "Inline" should "partially evaluate @inline functions" in {
+    @inline def simpleFunction(m: Int): String = if (m > 0) "Positive" else "Negative"
 
-    x should be(List(1, 2, 3))
+    simpleFunction(1) should be("Positive")
+    (reify { simpleFunction(1) }).replaceAll("\\$macro\\$\\d+", "") should be("""{
+    |  val m: Int = 1;
+    |  if (m.>(0))
+    |    "Positive"
+    |  else
+    |    "Negative"
+    |}""".stripMargin)
   }
 
-  it should "inline the if construct if the arguments are static" in {
-    @sinline val x: Int = 1
-    treeString(sinline(if (x > 3) "Yey!" else "Nope!")) should be("""Typed(Literal(Constant("Nope!")), TypeTree())""")
+  it should "evaluate if statements when there is an inline parameter that is constant" in {
+    @inline def simpleFunction0(m: Int @inlineable): String = if (m > 0) "Positive" else "Negative"
+    @inline def simpleFunction(m: Int @inline): String = simpleFunction0(m)
+
+    simpleFunction(2) should be("Positive")
+    (reify { simpleFunction(2) }).replaceAll("\\$macro\\$\\d+", "") should be("""{
+    |  val m: Int @ch.epfl.scalainline.inline = 2;
+    |  {
+    |    val m: Int @ch.epfl.scalainline.inline = 2;
+    |    "Positive"
+    |  }
+    |}""".stripMargin)
+  }
+
+  it should "work with recursion" in {
+    @inline def pow(base: Int, exp: Int @inline): Int = if (exp == 0) 1 else base * pow(base, exp - 1)
+
+    pow(3, 2) should be(9)
+    (reify { pow(3, 2) }).toString.replaceAll("\\$macro\\$\\d+", "") should be("""{
+    |  val base: Int = 3;
+    |  val exp: Int @ch.epfl.scalainline.inline = 2;
+    |  base.*({
+    |    val base: Int = base;
+    |    val exp: Int @ch.epfl.scalainline.inline = 1;
+    |    base.*({
+    |      val base: Int = base;
+    |      val exp: Int @ch.epfl.scalainline.inline = 0;
+    |      1
+    |    })
+    |  })
+    |}""".stripMargin)
   }
 
 }

@@ -1,0 +1,4 @@
+<plugin>
+  <name>partial-evaluator</name>
+  <classname>ch.epfl.scalainline.plugin.PartialEvaluationPlugin</classname>
+</plugin>
