@@ -1,9 +1,9 @@
 language: scala
-before-script:
+script:
   - git clone https://github.com/scalareflect/interpreter.git
   - cd interpreter
   - sbt publish-local
-script:
+  - cd ../
   - sbt ++$TRAVIS_SCALA_VERSION clean update compile test package
 scala:
   - 2.11.0
