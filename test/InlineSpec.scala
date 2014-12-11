@@ -20,9 +20,9 @@ class InlineSpec extends FlatSpec with ShouldMatchers {
 
     simpleFunction(i1) should be("Positive")
     (showCode { simpleFunction(i1) }).replaceAll("\\$macro\\$\\d+", "") should be("""if (InlineSpec.this.i1.>(0))
-    |  "Positive"
-    |else
-    |  "Negative" """.stripMargin.trim)
+        |  "Positive"
+        |else
+        |  "Negative" """.stripMargin.trim)
   }
 
   it should "evaluate if statements when there is an inline parameter that is constant" in {
@@ -83,7 +83,12 @@ class InlineSpec extends FlatSpec with ShouldMatchers {
 
   it should "be able to map over trees" in {
     val l1 = inline(List)(1, 2)
-    showCode(l1.map((x: Int) => x + 2).head).replaceAll("\\$macro\\$\\d+", "") should be("""3""".stripMargin)
+    val l2 = inline(List)(i1, 2)
+    l1.map((x: Int) => x + 2).head should be(3)
+    l2.map((x: Int) => x + 2).head should be(3)
+    showCode(l1.map((x: Int) => x + 2).head).replaceAll("\\$macro\\$\\d+", "") should be("""(1).+(2)""".stripMargin)
+    showCode(l2.map((x: Int) => x + 2).head).replaceAll("\\$macro\\$\\d+", "") should be("""InlineSpec.this.i1.+(2)""".stripMargin)
+
   }
 
   it should "respect @inline annotations on classes" in {
@@ -108,40 +113,51 @@ class InlineSpec extends FlatSpec with ShouldMatchers {
       v1.map((x: V) => num.plus(x, num.one))
     }
     val l1 = inline(List)(1.1, 2.2)
+    val l2 = inline(List)(d1, d2)
+
     addOne(l1, DoubleNumeric).head should be(2.1)
-    showCode(addOne(l1, DoubleNumeric).head).replaceAll("\\$macro\\$\\d+", "") should be("""2.1""")
+    showCode(addOne(l1, DoubleNumeric).head).replaceAll("\\$macro\\$\\d+", "") should be("""1.1.+(1.0)""")
+
+    addOne(l2, DoubleNumeric).head should be(2)
+    showCode(addOne(l2, DoubleNumeric).head).replaceAll("\\$macro\\$\\d+", "") should be("""InlineSpec.this.d1.+(1.0)""")
   }
 
   it should "be able to do fold on lists" in {
-    import Numeric._
     @inline def foldList[V](v1: List[V] @inline, num: Numeric[V]): V = {
       v1.foldLeft[V](num.zero, (agg: V, v: V) => num.plus(agg, v))
     }
     val l1 = inline(List)(1.1, 2.2)
-    // TODO this should not throw exceptions
-    // foldList(l1, DoubleNumeric) should be(3.3000000000000003)
-    // TODO This should not have Nil
-    showCode(foldList(l1, DoubleNumeric)).replaceAll("\\$macro\\$\\d+", "") should be("Nil.foldLeft[Int](3.3000000000000003, ((agg: Int, v: Int) => agg.+(v)))")
+    val l2 = inline(List)(d1, d2)
+
+    foldList(l1, DoubleNumeric) should be(3.3000000000000003)
+    showCode(foldList(l1, DoubleNumeric)).replaceAll("\\$macro\\$\\d+", "") should be("0.0.+(1.1).+(2.2)")
+    foldList(l2, DoubleNumeric) should be(3.0)
+    showCode(foldList(l2, DoubleNumeric)).replaceAll("\\$macro\\$\\d+", "") should be("0.0.+(InlineSpec.this.d1).+(InlineSpec.this.d2)")
   }
 
   it should "be able to do a dot product" in {
     // TODO Multiple parameter lists
-    // TODO Inline static
-    @inline
-    def dot[V](v1: List[V] @inline, v2: List[V] @inline, num: Numeric[V]): V = {
+    // TODO Vector
+    @inlinestatic
+    def dot[V](v1: List[V] @inlinestatic, v2: List[V] @inlinestatic, num: Numeric[V]): V = {
       (v1 zip v2).foldLeft(num.zero, { (sum: V, v: Tuple2[V, V]) =>
         num.plus(sum, num.times(v._1, v._2))
       })
     }
-    /*
-      This should work and produce a dot product!
-      val l1 = inline(List)(d1, d2)
-      val l2 = inline(List)(d3, d4)
-    */
+
     val l1 = inline(List)(1.1, 2.2)
     val l2 = inline(List)(3.1, 4.2)
+    val l3 = inline(List)(d1, d2)
+    val l4 = inline(List)(d3, d4)
+
     dot(l1, l2, DoubleNumeric) should be(12.650000000000002)
-    showCode((dot(l1, l2, DoubleNumeric))) should be("12.650000000000002")
+    showCode((dot(l1, l2, DoubleNumeric))) should be("0.0.+(1.1.*(3.1)).+(2.2.*(4.2))")
+    dot(l3, l4, DoubleNumeric) should be(11)
+    showCode((dot(l3, l4, DoubleNumeric))) should be("0.0.+(InlineSpec.this.d1.*(InlineSpec.this.d3)).+(InlineSpec.this.d2.*(InlineSpec.this.d4))")
+
+    val l5 = List(d1, d2)
+    val l6 = List(d3, d4)
+    showCode(dot(l5, l6, DoubleNumeric)) should be("dot[Double](l5, l6, library.DoubleNumeric)")
   }
 
 }

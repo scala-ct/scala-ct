@@ -34,9 +34,10 @@ class Cons[T](val head: T, val tail: List[T]) extends List[T] {
     thatList.head == head && thatList.tail == tail
   }
 }
+
 object Nil extends List[Nothing] {
   def head: Nothing = throw new RuntimeException("Head of the empty list!")
-  def tail: Nothing = throw new RuntimeException("Tail of the empty list!")
+  def tail: List[Nothing] = throw new RuntimeException("Tail of the empty list!")
 }
 
 /*
@@ -44,9 +45,9 @@ object Nil extends List[Nothing] {
  */
 object List {
   def apply[T](x1: T, x2: T, x3: T): List[T] =
-    new Cons[T](x1, new Cons[T](x2, new Cons(x3, Nil)))
+    new Cons(x1, new Cons(x2, new Cons(x3, Nil)))
   def apply[T](x1: T, x2: T): List[T] =
-    new Cons[T](x1, new Cons[T](x2, Nil))
+    new Cons(x1, new Cons(x2, Nil))
   def apply[T](x1: T): List[T] =
     new Cons(x1, Nil)
   def apply[T](): List[T] =

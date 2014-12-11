@@ -96,10 +96,11 @@ class PartialEvaluationPlugin(val global: Global) extends Plugin {
   case object News extends DebugContext
   case object Blocks extends DebugContext
 
+  var ident = 0
   var debugging = false
   val debugContexts: Set[DebugContext] = Set(Default, AppTpe)
   def debug(msg: String, context: DebugContext = Default): Unit =
-    if (debugContexts.contains(context) && debugging) println(msg)
+    if (debugContexts.contains(context) && debugging) println("" * ident + msg)
 
   private object Component extends PluginComponent with TypingTransformers with Transform {
     val global: PartialEvaluationPlugin.this.global.type = PartialEvaluationPlugin.this.global
@@ -174,10 +175,10 @@ class PartialEvaluationPlugin(val global: Global) extends Plugin {
             val sym = paramsMap(tree.symbol)._1
             api.typecheck(q"$sym")
 
-          case t: TypeTree =>
+          /*case t: TypeTree =>
             // promote
             if (tparamsMap.contains(t.tpe.typeSymbol)) TypeTree(tparamsMap(t.tpe.typeSymbol))
-            else t
+            else t*/
           case _ =>
             api.default(tree)
         })
@@ -265,7 +266,10 @@ class PartialEvaluationPlugin(val global: Global) extends Plugin {
       }
 
       def minimize(block: Tree): Tree = {
-        minimize(context)(block.asInstanceOf[context.Tree]).asInstanceOf[Tree]
+        debug("Minimizing:" + block)
+        val res = minimize(context)(block.asInstanceOf[context.Tree]).asInstanceOf[Tree]
+        debug("Minimized:" + res)
+        res
       }
 
       def minimize(c: Context)(block: c.Tree): c.Tree = {
@@ -281,14 +285,21 @@ class PartialEvaluationPlugin(val global: Global) extends Plugin {
               q"()"
             case Ident(x) if (vals.contains(tree.symbol)) =>
               vals(tree.symbol)
+            case t if !t.attachments.get[Self].isEmpty =>
+              val selfTree = t.attachments.get[Self].get.v.asInstanceOf[c.Tree]
+              t.removeAttachment[Self]
+
+              val res = api.default(t)
+              val newSelf = Self(api.default(selfTree).asInstanceOf[global.Tree])
+              res.updateAttachment(newSelf)
             case _ =>
               api.default(tree)
           }
         }
-
+        // get rid of the block
         minimizedBody match {
-          case Block(_, res) => res
-          case tree          => tree
+          case Block(_, res) => res.updateAttachment(Self(res.asInstanceOf[global.Tree]))
+          case tree          => tree.updateAttachment(Self(tree.asInstanceOf[global.Tree]))
         }
       }
 
@@ -326,7 +337,9 @@ class PartialEvaluationPlugin(val global: Global) extends Plugin {
               if (minimizedConstraints.contains(ptp)) minimizedConstraints(ptp)
               else variantE
             // TODO error
-            if (expectedVariant <:< static && variantA =:= dynamic) warning(s"Argument $arg did not match inlinity expected: $expectedTp got: $tp.")
+            if (expectedVariant <:< static && variantA =:= dynamic)
+              error(s"Argument $arg did not match inlinity expected: $expectedTp got: $tp.")
+
             (pargs zip args).foreach(tps => typecheck(arg, tps._1, tps._2))
         }
 
@@ -352,6 +365,7 @@ class PartialEvaluationPlugin(val global: Global) extends Plugin {
 
         val promoteArgs = (expectedTypes zip args).map {
           case (param, arg) =>
+            debug(s"Attachment of $arg is ${arg.attachments.get[TypeVariant]}")
             typecheck(arg, param, variantType(arg))
             // if all is OK coaerce arguments
             val resultType = coaerce(param, variantType(arg))
@@ -362,13 +376,13 @@ class PartialEvaluationPlugin(val global: Global) extends Plugin {
           x.tpe.typeSymbol.typeSignature.member(sym.asMethod.name).alternatives.find(alt => alt.typeSignature matches sym.asMethod.infoIn(x.tpe))
         }.getOrElse(sym)
 
-        debug(s"Method body fetching: " + lhs.attachments.get[Self] + " " + methodSym.owner + " " + functionAnnotation(methodSym))
         val shouldInline = !sym.isConstructor &&
           (functionAnnotation(methodSym) =:= inline || // explicitly annotated
             // TODO Discuss with Denys what to do here... TODO Refine for nested types.
             (functionAnnotation(methodSym) =:= inlinestatic && (expectedTypes zip args).forall(x => !(variant(x._1) =:= inlinestatic) || variant(x._2) =:= inline)) || // function is inlinestatic and all inlinestatic args are satisfied
             isInline(lhs)) // lhs is promoted to inline (type checking checks the arguments)
 
+        debug(s"Method body fetching: " + lhs.attachments.get[Self] + " " + methodSym.owner + " " + functionAnnotation(methodSym) + " " + lhs)
         def withInline[T](cond: Boolean)(block: => T): T = {
           if (cond) inlineLevel += 1
           val res = block
@@ -380,22 +394,37 @@ class PartialEvaluationPlugin(val global: Global) extends Plugin {
           val res = if (shouldInline) {
             debug("Args before:" + args.map(arg => s"$arg: ${arg.tpe}"), AppTpe)
             debug("Args after:" + promoteArgs.map(arg => s"$arg: ${arg.attachments.get[TypeVariant].get.tpe}"), AppTpe)
-            List(typeOf[Int], typeOf[Int])
+
             val res = if (canInline(sym)) { // method
               val self = lhs.attachments.get[Self].map(_.v).getOrElse(EmptyTree)
+
               // here we have a method sym
               val inlined = if (methodSym.owner == typeOf[Function1[_, _]].typeSymbol || methodSym.owner == typeOf[Function2[_, _, _]].typeSymbol) {
-                inlineLambda(context)(self, promoteArgs)
+                val tmpLevel = inlineLevel
+                inlineLevel = 0 // TODO VJ fix this to work
+                val inlined = inlineLambda(context)(self, promoteArgs)
+                debug(s"Inlining ${sym.owner}.$sym: ${showCode(inlined)}", AppTpe)
+                val res = transform(localTyper.typed(inlined))
+                debug(s"Inlined ${sym.owner}.$sym: ${showCode(res)}: ${variantType(res)}", AppTpe)
+
+                inlineLevel = tmpLevel
+                res
               } else {
-                inlineMethod(context)(
+                val inlined = inlineMethod(context)(
                   fetchBody(methodSym).get.asInstanceOf[context.Tree], self.asInstanceOf[context.Tree])(
                     List(typeOf[Int], typeOf[Int]))(
                       promoteArgs.asInstanceOf[List[context.Tree]])
+
+                debug(s"Inlining ${sym.owner}.$sym: ${showCode(inlined)}", AppTpe)
+                val res = transform(localTyper.typed(inlined))
+                debug(s"Inlined ${sym.owner}.$sym: ${showCode(res)}: ${variantType(res)}", AppTpe)
+                res
+
               }
-              debug(s"Inlining ${sym.owner}.$sym: ${show(inlined)}", AppTpe)
-              val res = transform(localTyper.typed(inlined))
-              debug(s"Inlined ${sym.owner}.$sym: ${show(res)}: ${variantType(res)}", AppTpe)
-              res
+              // debug(s"Inlining ${sym.owner}.$sym: ${show(inlined)}", AppTpe)
+              // val res = transform(localTyper.typed(inlined))
+              // debug(s"Inlined ${sym.owner}.$sym: ${show(res)}: ${variantType(res)}", AppTpe)
+              inlined
             } else { // interpretation of the unavailable functions
               val interpretee = treeCopy.Apply(tree, lhs, promoteArgs.map { arg =>
                 val argTree = if (variant(arg) =:= inline) inlineTree(arg)
@@ -458,178 +487,189 @@ class PartialEvaluationPlugin(val global: Global) extends Plugin {
       var inlineLevel: Int = 0
       def byMode(tp: Type) = if (inlineLevel == 0) tp else inline
 
-      override def transform(tree: Tree): Tree = tree match {
-        // TODO Gross Hack (we need access to underlying objects here or in the interpreter)
-        case q"Nil == Nil" => transform(localTyper.typed(q"_root_.ch.epfl.scalainline.inline(true)"))
-        case q"$x == Nil"  => transform(localTyper.typed(q"_root_.ch.epfl.scalainline.inline(false)"))
+      override def transform(tree: Tree): Tree = {
+        ident += 1
+        val res = tree match {
+          // TODO Gross Hack (we need access to underlying objects here or in the interpreter)
+          case q"Nil == Nil" => transform(localTyper.typed(q"_root_.ch.epfl.scalainline.inline(true)"))
+          case q"$x == Nil"  => transform(localTyper.typed(q"_root_.ch.epfl.scalainline.inline(false)"))
 
-        // constants and lambdas are static
-        case Literal(Constant(x)) =>
-          if (!isInline(tree)) // do not delete inlinity
-            // TODO remove the typecheck
-            tree.updateAttachment(TypeVariant(promoteType(localTyper.typed(tree).tpe.widen, byMode(static))))
+          // constants and lambdas are static
+          case Literal(Constant(x)) =>
+            if (tree.attachments.get[TypeVariant].isEmpty) // do not delete inlinity
+              // TODO remove the typecheck
+              tree.updateAttachment(TypeVariant(promoteType(localTyper.typed(tree).tpe.widen, byMode(static))))
 
-          tree.updateAttachment(Self(tree))
+            tree.updateAttachment(Self(tree))
 
-        case Function(vparams, body) =>
-          val res = treeCopy.Function(tree, vparams.map(x => transform(x).asInstanceOf[ValDef]), transform(body))
-          res.updateAttachment(TypeVariant(promoteOne(tree.tpe, byMode(static))))
-          res.updateAttachment(Self(res))
-          res
+          case Function(vparams, body) =>
+            val res = treeCopy.Function(tree, vparams.map(x => transform(x).asInstanceOf[ValDef]), transform(body))
+            res.updateAttachment(TypeVariant(promoteOne(tree.tpe, byMode(static))))
+            res.updateAttachment(Self(res))
+            res
 
-        case New(sel) =>
-          val newSel = transform(sel)
-          debug(s"New(sel: ${variant(newSel)}): ${promoteOne(tree.tpe, byMode(static))}", News)
-          treeCopy.New(tree, newSel).updateAttachment(TypeVariant(promoteOne(tree.tpe, byMode(static))))
+          case New(sel) =>
+            val newSel = transform(sel)
+            debug(s"New(sel: ${variant(newSel)}): ${promoteOne(tree.tpe, byMode(static))}", News)
+            treeCopy.New(tree, newSel).updateAttachment(TypeVariant(promoteOne(tree.tpe, byMode(static))))
 
-        case Block(body, res) =>
-          debug("Block: " + show(res), Blocks)
-          val (newBody, newRes) = (body.map(x => transform(x)), transform(res))
-          treeCopy.Block(tree, newBody, newRes)
-            .updateAttachment(TypeVariant(variantType(newRes)))
+          case Block(body, res) =>
+            debug("Block: " + show(res), Blocks)
+            val (newBody, newRes) = (body.map(x => transform(x)), transform(res))
+            treeCopy.Block(tree, newBody, newRes)
+              .updateAttachment(TypeVariant(variantType(newRes)))
 
-        case q"new ${ _ }[..${ tparams }](..${ params })" if tree.attachments.get[Self].isEmpty =>
-          val finalRes = transform(tree.updateAttachment(Self(tree)))
-          finalRes.updateAttachment(Self(finalRes))
+          case q"new ${ _ }[..${ tparams }](..${ params })" if tree.attachments.get[Self].isEmpty =>
+            val finalRes = transform(tree.updateAttachment(Self(tree)))
+            finalRes.updateAttachment(Self(finalRes))
 
-        /*
+          /*
          * Inlines access to direct constructor fields.
          * NOTE: This could also be done by the interpreter
          */
-        case Select(obj @ q"new ${ _ }[..${ tparams }](..${ params })", field) if obj.symbol.asMethod.paramss.head.exists(x => x.name.toString == field.toString.trim) =>
-          (obj.symbol.asMethod.paramss.head zip params).find(_._1.name.toString == field.toString.trim).map(_._2).get
+          case Select(obj @ q"new ${ _ }[..${ tparams }](..${ params })", field) if obj.symbol.asMethod.paramss.head.exists(x => x.name.toString == field.toString.trim) && field.toString.endsWith(" ") =>
+            debug("Field ||||||||||||||||||||||||:" + field)
+            (obj.symbol.asMethod.paramss.head zip params).find(_._1.name.toString == field.toString.trim).map(_._2).get
 
-        case Select(x, y) =>
-          val nx = transform(x)
-          def copy = treeCopy.Select(tree, nx, y)
-          val res = nx match {
-            case nx if nx.symbol != null && nx.symbol.hasPackageFlag =>
-              copy.updateAttachment(TypeVariant(promoteType(tree.tpe, byMode(static))))
+          case Select(x, y) =>
+            val nx = transform(x)
+            def copy = treeCopy.Select(tree, nx, y)
+            var applied = false
+            val res = nx match {
+              case nx if nx.symbol != null && nx.symbol.hasPackageFlag =>
+                copy.updateAttachment(TypeVariant(promoteType(tree.tpe, byMode(static))))
 
-            case Variant(_, `inline`) if tree.symbol != null && tree.symbol.isMethod && tree.symbol.asMethod.paramss.isEmpty => // interpret
-              val nonPolymorphicSymbol = localTyper.typed(Select(nx, y)).symbol
-              application(nonPolymorphicSymbol, localTyper.typed(copy), nx, Nil)
+              case Variant(_, `inline`) if tree.symbol != null && tree.symbol.isMethod && tree.symbol.asMethod.paramss.isEmpty => // interpret
+                val nonPolymorphicSymbol = localTyper.typed(Select(nx, y)).symbol
+                applied = true
+                application(nonPolymorphicSymbol, localTyper.typed(copy), nx, Nil)
 
-            case Variant(_, variant) =>
-              copy.updateAttachment(TypeVariant(promoteType(tree.tpe, variant)))
-          }
-          debug(s"Select(x:${variantType(nx)}, $y): ${variant(res)}", SelectContext)
+              case Variant(_, variant) =>
+                copy.updateAttachment(TypeVariant(promoteType(tree.tpe, variant)))
+            }
+            debug(s"Select(x:${variantType(nx)}, $y): ${variant(res)}", SelectContext)
 
-          if (tree.symbol != null && tree.symbol.isModule) res.updateAttachment(Self(tree))
-          else nx.attachments.get[Self].foreach(self => res.updateAttachment(self))
+            if (tree.symbol != null && tree.symbol.isModule) res.updateAttachment(Self(tree))
+            else if (applied) res.updateAttachment(Self(res))
+            else nx.attachments.get[Self].foreach(self => res.updateAttachment(self))
 
-          res
+            res
 
-        case TypeApply(x, targs) =>
-          val lhs = transform(x)
-          val res = treeCopy.TypeApply(tree, lhs, targs.map(transform(_)))
-          lhs match {
-            case Variant(_, variant) =>
-              res.updateAttachment(TypeVariant(promoteType(tree.tpe, variant)))
-          }
-          lhs.attachments.get[Self].foreach(self => res.updateAttachment(self))
-          res
+          case TypeApply(x, targs) =>
+            val lhs = transform(x)
+            val res = treeCopy.TypeApply(tree, lhs, targs.map(transform(_)))
+            lhs match {
+              case Variant(_, variant) =>
+                res.updateAttachment(TypeVariant(promoteType(tree.tpe, variant)))
+            }
+            lhs.attachments.get[Self].foreach(self => res.updateAttachment(self))
+            x.symbol
+            res.attachments
+            res
 
-        case Ident(x) if tree.symbol.isModule =>
-          tree.updateAttachment(TypeVariant(promoteType(tree.tpe, byMode(static))))
-          tree.updateAttachment(Self(tree))
+          case Ident(x) if tree.symbol.isModule =>
+            tree.updateAttachment(TypeVariant(promoteType(tree.tpe, byMode(static))))
+            tree.updateAttachment(Self(tree))
 
-        case Ident(x) if promotedTypes.contains(tree.symbol) =>
-          val res = (if (isInline(promotedTypes(tree.symbol)._1)) {
-            promotedTypes(tree.symbol)._1
-          } else super.transform(tree))
-          debug(s"$x = $res: ${promotedTypes(tree.symbol)._2}", Idents)
-          res.updateAttachment(TypeVariant(promotedTypes(tree.symbol)._2))
-          res.updateAttachment(Self(promotedTypes(tree.symbol)._1))
-          res
+          case Ident(x) if promotedTypes.contains(tree.symbol) =>
+            val res = (if (isInline(promotedTypes(tree.symbol)._1)) {
+              promotedTypes(tree.symbol)._1
+            } else super.transform(tree))
+            debug(s"$x = $res: ${promotedTypes(tree.symbol)._2}", Idents)
+            res.updateAttachment(TypeVariant(promotedTypes(tree.symbol)._2))
+            res.updateAttachment(Self(promotedTypes(tree.symbol)._1))
+            res
 
-        case DefDef(_, _, _, vparams, _, _) =>
-          val paramssTypes = vparams.map(p => p.map { case ValDef(_, _, tpe, _) => tpe })
-          // for now treating only non-curried functions
-          val skipFunction = paramssTypes.exists(_.exists(_.tpe.exists {
-            case Variant(_, v @ (`inline` | `inlinestatic`)) => true
-            case _ => false
-          }))
-          if (skipFunction) tree else super.transform(tree)
+          case DefDef(_, _, _, vparams, _, _) =>
+            val paramssTypes = vparams.map(p => p.map { case ValDef(_, _, tpe, _) => tpe })
+            // for now treating only non-curried functions
+            val skipFunction = paramssTypes.exists(_.exists(_.tpe.exists {
+              case Variant(_, v @ (`inline` | `inlinestatic`)) => true
+              case _ => false
+            }))
+            if (skipFunction) tree else super.transform(tree)
 
-        /*
+          /*
          * Prints trees of the argument - used for debugging partial evaluation.
          */
-        case Apply(x, args) if inlinePackageObject(x) && x.symbol.name.toString == "showCode" =>
-          val res = transform(args.head)
-          localTyper.typed(q"new String(${showCode(res)})")
+          case Apply(x, args) if inlinePackageObject(x) && x.symbol.name.toString == "showCode" =>
+            val res = transform(args.head)
+            localTyper.typed(q"new String(${showCode(res)})")
 
-        /*
+          /*
          * CT intrinsic promotes the types of a shared object such that:
          *   - all parameters are promoted to inline
          */
-        case Apply(x, args) if inlinePackageObject(x) && x.symbol.name.toString == "ct" =>
-          val trArg = transform(args.head)
-          if (!(variant(trArg) <:< static)) error("inline can only contain static values.")
-          val res = eval(trArg).updateAttachment(TypeVariant(promoteType(tree.tpe, inline)))
-          assert(variant(res) =:= inline)
-          res
+          case Apply(x, args) if inlinePackageObject(x) && x.symbol.name.toString == "ct" =>
+            val trArg = transform(args.head)
+            if (!(variant(trArg) <:< static)) error("inline can only contain static values.")
+            val res = eval(trArg).updateAttachment(TypeVariant(promoteType(tree.tpe, inline)))
+            assert(variant(res) =:= inline)
+            res
 
-        case Apply(x, args) if inlinePackageObject(x) && x.symbol.name.toString == "debug" =>
-          debugging = true
-          val res = transform(args.head)
-          debugging = false
-          res
+          case Apply(x, args) if inlinePackageObject(x) && x.symbol.name.toString == "debug" =>
+            debugging = true
+            val res = transform(args.head)
+            debugging = false
+            res
 
-        /*
+          /*
          * Inline intrinsic promotes the types of a shared object such that:
          *   - all functions become inline
          *   - all non-generic arguments of functions become inline
          */
-        case Apply(x, args) if inlinePackageObject(x) && x.symbol.name.toString == "inline" =>
-          val trArg = transform(args.head)
+          case Apply(x, args) if inlinePackageObject(x) && x.symbol.name.toString == "inline" =>
+            val trArg = transform(args.head)
 
-          if (!(variant(trArg) <:< static)) error("inline can only contain static values.")
-          trArg.updateAttachment(TypeVariant(promoteType(tree.tpe, inline)))
+            if (!(variant(trArg) <:< static)) error("inline can only contain static values.")
+            trArg.updateAttachment(TypeVariant(promoteType(tree.tpe, inline)))
 
-        case Apply(x, args) if x.symbol != null =>
-          val (lhs, transArgs) = (transform(x), args.map(transform(_)))
-          // TODO Need type arguments of the application
-          // TODO Need type arguments of self
-          // TODO handle multiple application
-          application(x.symbol, tree, lhs, transArgs)
+          case Apply(x, args) if x.symbol != null =>
+            val (lhs, transArgs) = (transform(x), args.map(transform(_)))
+            // TODO Need type arguments of the application
+            // TODO Need type arguments of self
+            // TODO handle multiple application
+            application(x.symbol, tree, lhs, transArgs)
 
-        /*
+          /*
         * For valdefs that (in expressions position) we update the type
         * according to the rhs' inlinity. The rhs is stored to `promotedTypes`
         * for fetching by following Idents.
         */
-        case ValDef(a, b, c, d) =>
-          val rhs = transform(d)
-          val newTpe = rhs.attachments.get[TypeVariant].map(_.tpe)
-          newTpe.foreach(tpe => promotedTypes += (tree.symbol -> ((rhs, tpe))))
-          debug(s"valdef rhs = $rhs: $newTpe", ValDefs)
+          case ValDef(a, b, c, d) =>
+            val rhs = transform(d)
+            val newTpe = rhs.attachments.get[TypeVariant].map(_.tpe)
+            newTpe.foreach(tpe => promotedTypes += (tree.symbol -> ((rhs, tpe))))
+            debug(s"valdef rhs = $rhs: $newTpe", ValDefs)
 
-          val newTypeTree = newTpe.map(TypeTree(_)).getOrElse(c)
-          localTyper.typed(copyValDef(tree)(a, b, newTypeTree, rhs))
+            val newTypeTree = newTpe.map(TypeTree(_)).getOrElse(c)
+            localTyper.typed(copyValDef(tree)(a, b, newTypeTree, rhs))
 
-        /*
+          /*
          * Type checking: if not inline, the result type is a lub of all branches and the condition.
          * Transformation: First transform the condition, if inline remove the if, and then
          * transform the branches. This prevents infinite recursion.
          */
-        case If(c, t, e) =>
-          val nc = transform(c)
-          debug(s"if c = $nc: ${variantType(nc)}", IfStatement)
-          if (isInline(nc))
-            if (value[Boolean](nc)) transform(t)
-            else transform(e)
-          else {
-            val (thn, els) = (transform(t), transform(e))
-            val result = treeCopy.If(tree, nc, thn, els)
-            val condType = promoteType(lub(thn.tpe :: els.tpe :: Nil), variant(nc))
-            val resType = lub(condType :: variant(thn) :: variant(els) :: Nil)
-            result.updateAttachment(TypeVariant(resType))
-            result
-          }
+          case If(c, t, e) =>
+            val nc = transform(c)
+            debug(s"if c = $nc: ${variantType(nc)}", IfStatement)
+            if (isInline(nc))
+              if (value[Boolean](nc)) transform(t)
+              else transform(e)
+            else {
+              val (thn, els) = (transform(t), transform(e))
+              val result = treeCopy.If(tree, nc, thn, els)
+              val condType = promoteType(lub(thn.tpe :: els.tpe :: Nil), variant(nc))
+              val resType = lub(condType :: variant(thn) :: variant(els) :: Nil)
+              result.updateAttachment(TypeVariant(resType))
+              result
+            }
 
-        case _ =>
-          super.transform(tree)
+          case _ =>
+            super.transform(tree)
+        }
+        ident -= 1
+        res
       }
     }
   }
