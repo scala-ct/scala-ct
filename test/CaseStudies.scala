@@ -7,14 +7,6 @@ import math._
 import scala.collection.immutable.Vector
 
 /*class CaseStudiesSpec extends FlatSpec with ShouldMatchers {
-
-  @inline
-  def dot[V: Numeric](v1: Vector[V] @inlinestatic, v2: Vector[V] @inlinestatic): V = {
-    (v1 zip v2).foldLeft(implicitly[Numeric[V]].zero) { (sum, v) =>
-      sum + v._1 * v._2
-    }
-  }
-
   // FFT example
   def omega(k: Int, N: Int): Complex = {
     val kth = -2.0 * k * math.Pi / N
@@ -45,7 +37,7 @@ import scala.collection.immutable.Vector
     case ((e :: es), (o :: os)) => e :: (o :: mergeEvenOdd(es, os))
   }
 
-  @inline
+  @inlinestatic
   def fft(xs: List[Complex] @inlinestatic): List[Complex] @inlinestatic = xs match {
     case (x :: Nil) => xs
     case _ =>
@@ -62,4 +54,4 @@ import scala.collection.immutable.Vector
 
   // variable argument lists?
   // power function
-}*/ 
+}*/
