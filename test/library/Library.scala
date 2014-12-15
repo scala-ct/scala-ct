@@ -4,7 +4,7 @@ sealed trait List[+T] {
   def head: T
   def tail: List[T]
 
-  final def zip[U](l: List[U]): List[Tuple2[T, U]] = if (this == Nil) {
+  def zip[U](l: List[U]): List[Tuple2[T, U]] = if (this == Nil) {
     Nil
   } else {
     new Cons[Tuple2[T, U]](
@@ -12,6 +12,18 @@ sealed trait List[+T] {
         head,
         l.head),
       tail.zip(l.tail))
+  }
+
+  def zipWithIndex: List[Tuple2[T, Int]] = zipWithStartingIndex(0)
+
+  def zipWithStartingIndex(starting: Int): List[Tuple2[T, Int]] = if (this == Nil) {
+    Nil
+  } else {
+    new Cons(
+      new Tuple2(
+        head,
+        starting),
+      tail.zipWithStartingIndex(starting + 1))
   }
 
   def map[U](f: T => U): List[U] = if (this == Nil) {
@@ -26,6 +38,8 @@ sealed trait List[+T] {
     else
       tail.foldLeft(f(z, head), f)
   }
+
+  def length: Int = if (this == Nil) 0 else tail.length + 1
 }
 
 class Cons[T](val head: T, val tail: List[T]) extends List[T] {
@@ -44,6 +58,8 @@ object Nil extends List[Nothing] {
  * Does not work with the interpreter!
  */
 object List {
+  def apply[T](x1: T, x2: T, x3: T, x4: T): List[T] =
+    new Cons(x1, new Cons(x2, new Cons(x3, new Cons(x4, Nil))))
   def apply[T](x1: T, x2: T, x3: T): List[T] =
     new Cons(x1, new Cons(x2, new Cons(x3, Nil)))
   def apply[T](x1: T, x2: T): List[T] =
@@ -52,17 +68,6 @@ object List {
     new Cons(x1, Nil)
   def apply[T](): List[T] =
     Nil
-
-  def zip[T, U](l1: List[T], l2: List[U]): List[Tuple2[T, U]] = if (l1 == Nil) {
-    Nil
-  } else {
-    new Cons[Tuple2[T, U]](
-      new Tuple2(
-        l1.head,
-        l2.head),
-      zip(l1.tail, l2.tail))
-  }
-
 }
 
 class Tuple2[+T, +U](val _1: T, val _2: U) {
@@ -75,11 +80,13 @@ class Tuple2[+T, +U](val _1: T, val _2: U) {
   override def toString: String = s"(${_1},${_2})"
 }
 
-import ch.epfl.scalainline._
+import ch.epfl.scalact._
+
 object Numeric {
-  @inline
-  implicit def dnum: Numeric[Double] @inline = DoubleNumeric
+  @ct implicit def dnum(): Numeric[Double] @ct = DoubleNumeric
+  @ct implicit def dnumct(): Numeric[Double @ct] @ct = DoubleNumericCT
 }
+
 trait Numeric[T] {
   def plus(x: T, y: T): T
   def minus(x: T, y: T): T
@@ -90,19 +97,28 @@ trait Numeric[T] {
   def one(): T
 
   class Ops(lhs: T) {
-    @inline def +(rhs: T @inlinestatic) = plus(lhs, rhs)
-    @inline def -(rhs: T @inlinestatic) = minus(lhs, rhs)
-    @inline def *(rhs: T @inlinestatic) = times(lhs, rhs)
+    @ct def +(rhs: T) = plus(lhs, rhs)
+    @ct def -(rhs: T) = minus(lhs, rhs)
+    @ct def *(rhs: T) = times(lhs, rhs)
   }
 
-  @inline implicit def mkNumericOps(lhs: T): Ops = new Ops(lhs)
+  @ct implicit def mkNumericOps(lhs: T): Ops = new (Ops @ ct)(lhs)
 }
 
-object DoubleNumeric extends Numeric[Double] {
-  @inline def plus(x: Double, y: Double): Double = x + y
-  @inline def minus(x: Double, y: Double): Double = x - y
-  @inline def times(x: Double, y: Double): Double = x * y
-  @inline def fromInt(x: Int): Double = x
-  @inline def one: Double = 1.0
-  @inline def zero: Double = 0.0
+object DoubleNumeric extends Numeric[Double] @ct {
+  @ct def plus(x: Double, y: Double): Double = x + y
+  @ct def minus(x: Double, y: Double): Double = x - y
+  @ct def times(x: Double, y: Double): Double = x * y
+  @ct def fromInt(x: Int): Double = x
+  @ct def one: Double = 1.0
+  @ct def zero: Double = 0.0
+}
+
+object DoubleNumericCT extends Numeric[Double @ct] @ct {
+  @ct def plus(x: Double @ct, y: Double @ct): Double @ct = x + y
+  @ct def minus(x: Double @ct, y: Double @ct): Double @ct = x - y
+  @ct def times(x: Double @ct, y: Double @ct): Double @ct = x * y
+  @ct def fromInt(x: Int @ct): Double = x
+  @ct def one: Double @ct = ct(1.0)
+  @ct def zero: Double @ct = ct(0.0)
 }
