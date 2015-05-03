@@ -4,14 +4,14 @@ import scala.annotation.StaticAnnotation
 import language.experimental.macros
 import scala.reflect.macros.blackbox.Context
 
-package object scalainline {
+package object scalact {
 
   /**
    * Partially evaluates the body (must be static) and returns an inline version of the
    * type T. All operations on the return type will be inlined and all non-generic
-   * arguments @inline.
+   * arguments @ct.
    */
-  def inline[T](body: => T): T = ???
+  def ct[T](body: => T): T = ???
 
   /**
    * Prints the code of the partially evaluated body.

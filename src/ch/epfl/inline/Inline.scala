@@ -1,4 +1,4 @@
-package ch.epfl.scalainline
+package ch.epfl.scalact
 
 import scala.annotation.StaticAnnotation
 
@@ -23,7 +23,7 @@ sealed class static extends dynamic
  * Marker trait that denotes that all operations on the type will be executed at
  * compile-time.
  */
-final class inline extends static
+final class ct extends static
 
 /*
  * Marker trait that denotes that if the function argument will be converted to
@@ -31,4 +31,4 @@ final class inline extends static
  * This is added since absence of this type requires special handling in several
  * locations.
  */
-final class inlinestatic extends Variant
+final class ctstatic extends Variant
